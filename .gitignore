@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Data (large files)
+data/
+data_cache/
+*.parquet
+*.arrow
+
+# Model artifacts
+runs/
+*.onnx
+*.bin
+*.safetensors
+*.pt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+credentials.json

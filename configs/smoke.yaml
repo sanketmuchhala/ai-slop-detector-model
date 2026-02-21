@@ -1,0 +1,53 @@
+seed: 42
+run_name: "smoke-test"
+
+model:
+  name: "bert-base-cased"
+  num_labels: 2
+  use_lora: false
+
+data:
+  dataset: "wiki_human_ai"
+  train_on_raid: false
+  max_length: 128
+  val_size: 0.1
+  test_size: 0.1
+  max_train_samples: 200
+  max_eval_samples: 100
+
+training:
+  learning_rate: 2e-5
+  num_epochs: 1
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 1
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  fp16: false
+  save_strategy: "epoch"
+  eval_strategy: "epoch"
+  metric_for_best_model: "eval_auc"
+  greater_is_better: true
+  load_best_model_at_end: true
+  save_total_limit: 1
+  logging_steps: 10
+  dataloader_num_workers: 0
+
+eval:
+  raid_split: "train"
+  raid_include_adversarial: false
+  fpr_targets: [0.01, 0.05]
+  tpr_targets: [0.90]
+  threshold_sweep_steps: 100
+  max_eval_samples: 100
+
+calibration:
+  conservative_max_fpr: 0.01
+  balanced_target_tpr: 0.90
+
+export:
+  onnx: false
+  model_version: "v0.1.0-smoke"
+
+output:
+  runs_dir: "runs"
