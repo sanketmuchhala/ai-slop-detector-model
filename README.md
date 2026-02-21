@@ -1,106 +1,104 @@
-# SlopGuard
-LinkedIn AI slop detector. Scores posts as Human vs AI-written and shows a percentage badge directly on the post.
+# AI Slop Detector — Model Repo
 
-## What this does
-- Adds a small label on LinkedIn posts in your feed and on post pages.
-- Shows an “AI-likelihood” score as a percentage.
-- Lets you tune sensitivity and hide labels if you want.
-- Works locally in your browser for fast tagging; optional server mode for heavier models.
+## What this is
 
-## Why
-LinkedIn is flooded with template posts and LLM-generated content.
-This extension helps you:
-- Filter what you read.
-- Calibrate trust signals.
-- Spot engagement bait faster.
+This repository trains a binary text classifier that scores whether a given passage is AI-written or human-written. The model outputs a calibrated probability and a discrete label at a chosen operating threshold. The primary use-case is LinkedIn post classification, but evaluation spans multiple domains via the RAID benchmark. The trained artifact (PyTorch + ONNX) is consumed by a separate browser-extension repo that runs inference on LinkedIn pages.
 
-This is a classifier, not a truth machine. Treat scores as a signal.
+## Scope
 
-## How it works
-1. The browser extension reads the visible post text on linkedin.com.
-2. It runs a detector model and outputs:
-   - AI likelihood (0–100)
-   - Human likelihood (0–100)
-   - Confidence band (low, medium, high)
-3. The extension injects a badge into the LinkedIn UI next to the post header.
+**In scope (Phase 1)**
 
-## Model approach
-We train a lightweight text classifier focused on real LinkedIn writing.
-Planned pipeline:
-- Dataset
-  - Human: verified posts, long-form originals, varied styles
-  - AI: LLM generations, rewrites, templated posts, prompt variants
-- Features
-  - Token patterns, repetition, burstiness, structure signals
-  - Optional embedding features for robustness
-- Training
-  - Baseline: logistic regression or small transformer encoder
-  - Calibrated probabilities (temperature scaling or isotonic)
-- Evaluation
-  - Accuracy, ROC-AUC, precision/recall
-  - False positive rate on niche domains
-  - Stress tests on edited AI text and bilingual posts
+- Text-only detection (no images, metadata, or user history).
+- LinkedIn as the primary deployment surface.
+- Multi-domain evaluation using RAID (news, Wikipedia, abstracts, reviews, etc.).
+- Exported inference artifact (ONNX) with a defined JSON contract.
 
-## Extension UI
-Badge states:
-- Human-leaning: “Human” + percent
-- AI-leaning: “AI” + percent
-- Uncertain: “Unclear” + percent range
+**Out of scope (Phase 1)**
 
-Controls:
-- Threshold slider (more strict vs more forgiving)
-- Toggle badges on/off
-- Debug mode to show feature hints and confidence
+- Authorship certainty claims — the model produces probabilities, not verdicts.
+- Identity detection or attribution to a specific person or LLM.
+- Watermark detection or embedding.
 
-## Tech stack
-- Extension: Manifest V3, TypeScript, DOM injection
-- Model:
-  - Option A: ONNX model shipped with the extension
-  - Option B: Local server inference (FastAPI/Node) for bigger models
-- Packaging: pnpm or npm, build scripts for Chrome
+## Architecture
 
-## Repo structure (suggested)
-- extension/
-  - src/
-  - manifest.json
-  - content-script/
-  - options-page/
-- model/
-  - data/
-  - training/
-  - eval/
-  - export/
-- api/ (optional)
-  - inference server
-- docs/
-  - screenshots
-  - design notes
+- **Data** — Ingest and split RAID dataset; optionally augment with `wikipedia-human-ai`. Produce stratified train/val/test sets.
+- **Train** — Fine-tune `bert-base-cased` with a binary classification head. Standard full fine-tune first; LoRA (via PEFT) as an optimization lever to reduce compute and memory.
+- **Eval** — Compute ROC, AUC, threshold sweeps, and per-slice metrics across RAID axes (domain, generator family, decoding strategy, adversarial attack).
+- **Export** — Save best checkpoint as PyTorch `.bin` and convert to ONNX with fixed input shapes.
+- **Inference** — Deterministic scoring function: text in, JSON out. Handles tokenization, normalization, and threshold application.
 
-## Getting started (planned)
-1. Clone repo
-2. Install deps
-3. Build extension
-4. Load unpacked extension in Chrome
-5. Open LinkedIn feed and see badges
+RAID is used as the **primary evaluation benchmark**, not necessarily as the only training source. Training data may combine RAID with other curated sets.
 
-## Roadmap
-- v0: Heuristic baseline + simple UI badge
-- v1: Trained model + calibrated score + thresholds
-- v2: ONNX in-browser inference
-- v3: Per-user tuning and feedback loop (opt-in)
-- v4: Language support beyond English
+LoRA is an **optimization lever** — the baseline is a full fine-tune; LoRA is introduced in Phase 1C to compare parameter-efficient tuning against the baseline in both accuracy and resource usage.
 
-## Ethics and safety
-- No auto-actions. This only labels content.
-- No selling private data.
-- Default to on-device inference.
-- Clear “uncertain” state to reduce overconfidence.
+## Data
 
-## Contributing
-PRs welcome:
-- DOM injection reliability across LinkedIn layouts
-- Dataset curation and evaluation harness
-- Model export and runtime performance
+### RAID
 
-## License
-MIT
+The RAID dataset ([paper](https://arxiv.org/abs/2405.07940), [repo](https://github.com/liamdugan/raid)) covers:
+
+- **Domains**: news, Wikipedia, books, abstracts, reviews, Reddit, recipes, poetry, and more.
+- **Generator models**: GPT-4, GPT-3.5, LLaMA, Mistral, Cohere, and others.
+- **Decoding strategies**: greedy, sampling, top-k, nucleus.
+- **Adversarial attacks**: paraphrasing, homoglyph substitution, whitespace perturbation, and others.
+
+### Local dataset option
+
+[`gouwsxander/wikipedia-human-ai`](https://huggingface.co/datasets/gouwsxander/wikipedia-human-ai) — Wikipedia passages paired with AI rewrites. Useful as a warm-start fine-tuning set or supplementary data.
+
+### Label schema
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `label` | `human` \| `ai` | yes | Binary target |
+| `domain` | string | eval only | For stratified eval slicing |
+| `generator_family` | string | eval only | Model or model family that generated the text |
+| `attack_type` | string | eval only | Adversarial perturbation type, if any |
+
+## Metrics and evaluation
+
+### Definitions
+
+- **TPR (True Positive Rate)** — fraction of AI texts correctly identified as AI. Also called recall or sensitivity.
+- **FPR (False Positive Rate)** — fraction of human texts incorrectly flagged as AI. The quantity we most want to minimize.
+
+### ROC and threshold sweeps
+
+Produce a full ROC curve over the `[0, 1]` score range. Report AUC. Sweep thresholds at 0.01 increments and log (threshold, TPR, FPR) triples.
+
+### Required evaluation slices
+
+| Slice | Grouping key | Purpose |
+|---|---|---|
+| Overall | — | Aggregate performance |
+| By domain | `domain` | Detect domain-specific weaknesses |
+| By generator model/family | `generator_family` | Robustness across LLM sources |
+| By decoding strategy | `decoding_strategy` | Sensitivity to generation method |
+| By adversarial attack | `attack_type` | Resilience to evasion attempts |
+
+### Operating points
+
+| Mode | Definition | Use-case |
+|---|---|---|
+| **Conservative** | Choose threshold where FPR ≤ 1% on the human slice | Production default — minimize false accusations |
+| **Balanced** | Maximize AUC; report FPR at TPR = 90% | Development analysis and model comparison |
+
+## Repo layout
+
+```
+ai-slop-detector-model/
+├── data/              # raw and processed datasets (gitignored)
+├── training/          # training scripts, configs, hyperparameter sweeps
+├── eval/              # evaluation scripts, slice analysis, plots
+├── export/            # ONNX conversion, model packaging
+├── inference/         # inference contract, scoring function, normalization
+├── plan/              # execution plans (exists now)
+├── claude/            # Claude Code contributor guide (exists now)
+└── README.md
+```
+
+Only `plan/`, `claude/`, and `README.md` exist right now. Other directories will be created as code is added.
+
+## Phase plan
+
+See [`plan/phase_1.md`](plan/phase_1.md) for the Phase 1 execution plan.
