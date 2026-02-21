@@ -13,8 +13,8 @@ venv/
 env/
 
 # Data (large files)
-data/
-data_cache/
+/data/
+/data_cache/
 *.parquet
 *.arrow
 
