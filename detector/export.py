@@ -7,7 +7,7 @@ from pathlib import Path
 from textwrap import dedent
 
 import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
+from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
 from detector.config import Config
 
@@ -141,6 +141,17 @@ def generate_model_card(
         b = thresholds.get("balanced", {})
         balanced_str = f"threshold={b.get('threshold', 'N/A')}, FPR={b.get('measured_fpr', 'N/A')}"
 
+    training_data_lines = ["- gouwsxander/wikipedia-human-ai (Wikipedia paragraphs + AI rewrites)"]
+    if config.data.train_on_raid:
+        adv_note = " incl. adversarial" if config.data.raid_include_adversarial else ""
+        splits = "train+extra" if config.data.raid_extra_split else "train"
+        training_data_lines.append(f"- RAID benchmark ({splits} split{adv_note}) — diverse multi-model AI text")
+    training_data_str = "\n".join(training_data_lines)
+
+    ece_warning = ""
+    if ece_str != "N/A" and metrics and metrics.get("wiki", {}).get("ece", 0) > 0.05:
+        ece_warning = "\n- ECE > 0.05: predicted probabilities may not be well-calibrated"
+
     card = dedent(f"""\
     # AI Slop Detector — Model Card
 
@@ -151,7 +162,7 @@ def generate_model_card(
     - **Version**: {config.export.model_version}
 
     ## Training Data
-    - **Primary**: gouwsxander/wikipedia-human-ai (Wikipedia paragraphs + AI rewrites)
+    {training_data_str}
     - **Labels**: 0 = human, 1 = AI-generated
 
     ## Evaluation Results
@@ -166,11 +177,9 @@ def generate_model_card(
     - Outputs calibrated probabilities, not certainty claims
 
     ## Limitations
-    - Trained primarily on Wikipedia-style text; performance may degrade on other domains
     - Single language (English)
-    - Does not detect specific AI model or authorship
-    - Scores should be interpreted as probabilities, not verdicts
-    {"- ECE > 0.05 indicates probability scale may not be well-calibrated" if ece_str != "N/A" and metrics and metrics.get("wiki", {}).get("ece", 0) > 0.05 else ""}
+    - Does not identify which specific AI model produced the text
+    - Scores should be interpreted as probabilities, not verdicts{ece_warning}
 
     ## Ethical Considerations
     - False positives (human text flagged as AI) are the most damaging failure mode

@@ -135,8 +135,58 @@ class TextDetector:
         threshold_mode: Literal["conservative", "balanced"] = "conservative",
         batch_size: int = 32,
     ) -> list[dict]:
-        """Score multiple texts. Returns list of inference JSONs."""
-        results = []
-        for text in texts:
-            results.append(self.score(text, threshold_mode))
+        """Score multiple texts in batched forward passes. Much faster than calling score() in a loop."""
+        threshold_data = self.thresholds.get(threshold_mode, {})
+        threshold = threshold_data.get("threshold", 0.5)
+        results: list[dict] = []
+
+        for i in range(0, len(texts), batch_size):
+            batch_norm = [self.normalize_text(t) for t in texts[i : i + batch_size]]
+
+            # Separate valid texts from empty ones (preserve original positions)
+            valid_idx = [j for j, t in enumerate(batch_norm) if t]
+            valid_texts = [batch_norm[j] for j in valid_idx]
+
+            # Map from batch-local index → (score_ai, n_tokens)
+            scores_map: dict[int, tuple[float, int]] = {}
+            if valid_texts:
+                inputs = self.tokenizer(
+                    valid_texts,
+                    max_length=512,
+                    truncation=True,
+                    padding=True,
+                    return_tensors="pt",
+                ).to(self.device)
+                with torch.no_grad():
+                    outputs = self.model(**inputs)
+                    probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
+                for k, orig_j in enumerate(valid_idx):
+                    n_tokens = int(inputs["attention_mask"][k].sum().item())
+                    scores_map[orig_j] = (float(probs[k, 1].item()), n_tokens)
+
+            for j, norm_text in enumerate(batch_norm):
+                if j not in scores_map:
+                    results.append({
+                        "error": "empty_input",
+                        "label": None,
+                        "score_ai": None,
+                        "confidence": None,
+                        "model_version": self.model_version,
+                        "threshold_mode": threshold_mode,
+                        "threshold": None,
+                        "text_stats": {"chars": 0, "tokens": 0},
+                    })
+                else:
+                    score_ai, n_tokens = scores_map[j]
+                    label = "ai" if score_ai >= threshold else "human"
+                    results.append({
+                        "label": label,
+                        "score_ai": round(score_ai, 6),
+                        "confidence": round(self._get_confidence(score_ai, threshold), 6),
+                        "model_version": self.model_version,
+                        "threshold_mode": threshold_mode,
+                        "threshold": round(threshold, 6),
+                        "text_stats": {"chars": len(norm_text), "tokens": n_tokens},
+                    })
+
         return results

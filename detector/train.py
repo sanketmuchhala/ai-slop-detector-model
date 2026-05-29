@@ -12,7 +12,7 @@ from pathlib import Path
 import evaluate
 import numpy as np
 import torch
-from datasets import DatasetDict
+from datasets import ClassLabel, concatenate_datasets
 from sklearn.metrics import roc_auc_score
 from transformers import (
     AutoModelForSequenceClassification,
@@ -124,6 +124,9 @@ def build_training_args(config: Config, output_dir: Path) -> TrainingArguments:
         "learning_rate": tc.learning_rate,
         "weight_decay": tc.weight_decay,
         "warmup_ratio": tc.warmup_ratio,
+        "max_grad_norm": tc.max_grad_norm,
+        "label_smoothing_factor": tc.label_smoothing_factor,
+        "lr_scheduler_type": tc.lr_scheduler_type,
         "fp16": tc.fp16 and torch.cuda.is_available(),
         "eval_strategy": tc.eval_strategy,
         "save_strategy": tc.save_strategy,
@@ -197,7 +200,31 @@ def train(config: Config) -> Path:
     # Load data
     print(f"Loading dataset: {config.data.dataset}")
     dataset = prepare_wiki_dataset(config.data, config.seed)
-    print(f"Train: {len(dataset['train'])}, Val: {len(dataset['validation'])}, Test: {len(dataset['test'])}")
+    print(f"Wiki — Train: {len(dataset['train'])}, Val: {len(dataset['validation'])}, Test: {len(dataset['test'])}")
+
+    if config.data.train_on_raid:
+        try:
+            from detector.data.raid import prepare_raid_for_training
+
+            raid_splits = ["train"]
+            if config.data.raid_extra_split:
+                raid_splits.append("extra")
+
+            raid_parts = []
+            for split_name in raid_splits:
+                print(f"Loading RAID '{split_name}' split for training...")
+                part = prepare_raid_for_training(
+                    split=split_name,
+                    include_adversarial=config.data.raid_include_adversarial,
+                    seed=config.seed,
+                )
+                raid_parts.append(part.cast_column("label", ClassLabel(names=["human", "ai"])))
+
+            raid_combined = concatenate_datasets(raid_parts) if len(raid_parts) > 1 else raid_parts[0]
+            dataset["train"] = concatenate_datasets([dataset["train"], raid_combined]).shuffle(seed=config.seed)
+            print(f"Combined train size: {len(dataset['train'])} (wiki + RAID {'+'.join(raid_splits)})")
+        except ImportError:
+            print("Warning: raid-bench not installed — training on wiki only. Run: pip install raid-bench")
 
     # Load model and tokenizer
     print(f"Loading model: {config.model.name} (LoRA: {config.model.use_lora})")

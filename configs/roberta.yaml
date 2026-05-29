@@ -1,8 +1,13 @@
 seed: 42
-run_name: "baseline-bert-full"
+run_name: "roberta-base"
+
+# RoBERTa-base is the recommended config for best accuracy.
+# It consistently outperforms BERT on AI text detection tasks and generalises
+# better across writing styles. Use this for production runs.
+# Train command: make train CONFIG=configs/roberta.yaml
 
 model:
-  name: "bert-base-cased"
+  name: "roberta-base"
   num_labels: 2
   use_lora: false
 
@@ -10,7 +15,7 @@ data:
   dataset: "wiki_human_ai"
   train_on_raid: true
   raid_include_adversarial: true
-  raid_extra_split: false
+  raid_extra_split: true   # also use the RAID "extra" split for more diversity
   max_length: 512
   val_size: 0.1
   test_size: 0.1

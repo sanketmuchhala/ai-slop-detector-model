@@ -7,7 +7,6 @@ from typing import Callable, Literal
 import numpy as np
 import pandas as pd
 import torch
-from tqdm import tqdm
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
 RAID_INSTALL_MSG = (
@@ -95,11 +94,41 @@ def build_raid_detector_fn(
     return detector_fn
 
 
+def prepare_raid_for_training(
+    split: Literal["train", "extra"] = "train",
+    include_adversarial: bool = True,
+    seed: int = 42,
+):
+    """Load a RAID labeled split as a balanced HF Dataset for training.
+
+    AI samples are undersampled to 1:1 human:AI ratio so class balance
+    matches the wiki_human_ai training data.
+
+    Returns Dataset with columns: text (str), label (int 0=human 1=AI).
+    """
+    import datasets as hf_datasets
+
+    df = load_raid_dataframe(split=split, include_adversarial=include_adversarial)
+
+    human_df = df[df["model"] == "human"][["generation"]].copy().rename(columns={"generation": "text"})
+    human_df["label"] = 0
+
+    ai_df = df[df["model"] != "human"][["generation"]].copy().rename(columns={"generation": "text"})
+    ai_df["label"] = 1
+
+    # Balance: keep all human, subsample AI to match
+    n = min(len(human_df), len(ai_df))
+    human_df = human_df.sample(n=n, random_state=seed)
+    ai_df = ai_df.sample(n=n, random_state=seed)
+
+    combined = pd.concat([human_df, ai_df], ignore_index=True).sample(frac=1, random_state=seed).reset_index(drop=True)
+    return hf_datasets.Dataset.from_pandas(combined, preserve_index=False)
+
+
 def run_raid_evaluation(
     detector_fn: Callable[[list[str]], list[float]],
     split: Literal["train", "extra"] = "train",
     include_adversarial: bool = True,
-    target_fpr: float | list[float] = 0.05,
 ) -> dict:
     """Run full RAID evaluation using the official API.
 

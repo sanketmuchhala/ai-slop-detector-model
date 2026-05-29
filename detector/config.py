@@ -36,6 +36,7 @@ class DataConfig(BaseModel):
     dataset: Literal["wiki_human_ai", "raid", "both"] = "wiki_human_ai"
     train_on_raid: bool = False
     raid_include_adversarial: bool = False
+    raid_extra_split: bool = False  # also concatenate the RAID "extra" split during training
     max_length: int = 512
     val_size: float = 0.1
     test_size: float = 0.1
@@ -50,7 +51,10 @@ class TrainingConfig(BaseModel):
     per_device_eval_batch_size: int = 32
     gradient_accumulation_steps: int = 2
     weight_decay: float = 0.01
-    warmup_ratio: float = 0.1
+    warmup_ratio: float = 0.06
+    max_grad_norm: float = 1.0
+    label_smoothing_factor: float = 0.0
+    lr_scheduler_type: str = "linear"
     fp16: bool = True
     save_strategy: str = "epoch"
     save_steps: int | None = None
