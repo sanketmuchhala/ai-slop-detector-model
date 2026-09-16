@@ -296,7 +296,9 @@ def train(config: Config) -> Path:
     model, tokenizer = load_model_and_tokenizer(config)
 
     # Tokenize
-    tokenized = tokenize_dataset(dataset, tokenizer, config.data.max_length)
+    # Stride cannot be >= max_length (adjust for small max_length in smoke tests)
+    stride = min(128, max(16, config.data.max_length // 4))
+    tokenized = tokenize_dataset(dataset, tokenizer, config.data.max_length, stride=stride)
 
     # Build trainer
     training_args = build_training_args(config, output_dir)
