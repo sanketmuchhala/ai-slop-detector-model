@@ -51,7 +51,7 @@ def test_invalid_dataset_name():
 def test_default_values():
     config = Config()
     assert config.seed == 42
-    assert config.model.name == "bert-base-cased"
+    assert config.model.name == "microsoft/deberta-v3-base"
     assert config.data.dataset == "wiki_human_ai"
     assert config.calibration.conservative_max_fpr == 0.01
 

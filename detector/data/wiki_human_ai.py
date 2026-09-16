@@ -92,14 +92,26 @@ def tokenize_dataset(
     dataset: DatasetDict,
     tokenizer: PreTrainedTokenizerBase,
     max_length: int = 512,
+    stride: int = 128,
 ) -> DatasetDict:
-    """Tokenize all splits. Adds input_ids, attention_mask, preserves label."""
+    """Tokenize all splits. Adds input_ids, attention_mask, preserves label.
+    Uses sliding window for long texts via return_overflowing_tokens."""
 
     def _tokenize(examples: dict) -> dict:
-        return tokenizer(
+        tokenized = tokenizer(
             examples["text"],
             max_length=max_length,
             truncation=True,
+            stride=stride,
+            return_overflowing_tokens=True,
+            padding="max_length",
         )
 
-    return dataset.map(_tokenize, batched=True, remove_columns=["text"])
+        # Propagate labels to the overlapping chunks
+        sample_mapping = tokenized.pop("overflow_to_sample_mapping")
+        if "label" in examples:
+            tokenized["label"] = [examples["label"][i] for i in sample_mapping]
+
+        return tokenized
+
+    return dataset.map(_tokenize, batched=True, remove_columns=["text", "label"] if "label" in dataset["train"].column_names else ["text"])

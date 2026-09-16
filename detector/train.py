@@ -24,6 +24,9 @@ from transformers import (
     TrainingArguments,
     set_seed,
 )
+from transformers.optimization import get_cosine_schedule_with_warmup
+from torch.optim import AdamW
+from detector.model import DebertaV3ForSlopDetection
 
 from detector.config import Config
 from detector.data.wiki_human_ai import prepare_wiki_dataset, tokenize_dataset
@@ -42,12 +45,24 @@ def set_deterministic(seed: int) -> None:
 def load_model_and_tokenizer(config: Config) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
     """Load base model and tokenizer. Apply LoRA if configured."""
     tokenizer = AutoTokenizer.from_pretrained(config.model.name)
-    model = AutoModelForSequenceClassification.from_pretrained(
-        config.model.name,
-        num_labels=config.model.num_labels,
-        id2label={0: "HUMAN", 1: "AI"},
-        label2id={"HUMAN": 0, "AI": 1},
-    )
+
+    if "deberta-v3" in config.model.name.lower():
+        model = DebertaV3ForSlopDetection.from_pretrained(
+            config.model.name,
+            num_labels=config.model.num_labels,
+            num_dropout=config.model.num_dropout,
+            dropout_rate=config.model.dropout_rate,
+            label_smoothing=config.training.label_smoothing_factor,
+            id2label={0: "HUMAN", 1: "AI"},
+            label2id={"HUMAN": 0, "AI": 1},
+        )
+    else:
+        model = AutoModelForSequenceClassification.from_pretrained(
+            config.model.name,
+            num_labels=config.model.num_labels,
+            id2label={0: "HUMAN", 1: "AI"},
+            label2id={"HUMAN": 0, "AI": 1},
+        )
 
     if config.model.use_lora and config.model.lora is not None:
         from peft import LoraConfig as PeftLoraConfig, get_peft_model
@@ -123,7 +138,6 @@ def build_training_args(config: Config, output_dir: Path) -> TrainingArguments:
         "gradient_accumulation_steps": tc.gradient_accumulation_steps,
         "learning_rate": tc.learning_rate,
         "weight_decay": tc.weight_decay,
-        "warmup_ratio": tc.warmup_ratio,
         "max_grad_norm": tc.max_grad_norm,
         "label_smoothing_factor": tc.label_smoothing_factor,
         "lr_scheduler_type": tc.lr_scheduler_type,
@@ -140,10 +154,30 @@ def build_training_args(config: Config, output_dir: Path) -> TrainingArguments:
         "report_to": "none",
     }
 
+    # Optional TrainingArguments fields based on transformers version
+    if hasattr(tc, "warmup_ratio"):
+        try:
+            from inspect import signature
+            if "warmup_ratio" in signature(TrainingArguments.__init__).parameters:
+                kwargs["warmup_ratio"] = tc.warmup_ratio
+        except Exception:
+            pass
+
+    if hasattr(tc, "bf16") and tc.bf16:
+        kwargs["bf16"] = tc.bf16 and torch.cuda.is_bf16_supported()
+        if kwargs["bf16"]:
+            kwargs["fp16"] = False
+
+    if hasattr(tc, "gradient_checkpointing") and tc.gradient_checkpointing:
+        kwargs["gradient_checkpointing"] = tc.gradient_checkpointing
+
     if tc.save_steps is not None:
         kwargs["save_steps"] = tc.save_steps
     if tc.eval_steps is not None:
         kwargs["eval_steps"] = tc.eval_steps
+
+    if "deberta-v3" in config.model.name.lower():
+        kwargs["label_smoothing_factor"] = 0.0 # Our custom model handles label smoothing internally
 
     return TrainingArguments(**kwargs)
 
@@ -205,6 +239,7 @@ def train(config: Config) -> Path:
     if config.data.train_on_raid:
         try:
             from detector.data.raid import prepare_raid_for_training
+            from datasets import interleave_datasets
 
             raid_splits = ["train"]
             if config.data.raid_extra_split:
@@ -221,10 +256,40 @@ def train(config: Config) -> Path:
                 raid_parts.append(part.cast_column("label", ClassLabel(names=["human", "ai"])))
 
             raid_combined = concatenate_datasets(raid_parts) if len(raid_parts) > 1 else raid_parts[0]
-            dataset["train"] = concatenate_datasets([dataset["train"], raid_combined]).shuffle(seed=config.seed)
-            print(f"Combined train size: {len(dataset['train'])} (wiki + RAID {'+'.join(raid_splits)})")
+
+            # Use datasets.interleave_datasets to mix RAID and Wikipedia at 80/20 ratio
+            print("Interleaving RAID and Wikipedia datasets with 80/20 ratio...")
+            dataset["train"] = interleave_datasets(
+                [raid_combined, dataset["train"]],
+                probabilities=[0.8, 0.2],
+                seed=config.seed,
+                stopping_strategy="all_exhausted"
+            )
+            print(f"Combined dataset length: {len(dataset['train'])}")
         except ImportError:
             print("Warning: raid-bench not installed — training on wiki only. Run: pip install raid-bench")
+
+    # Lightweight Data Augmentation
+    def add_noise(examples):
+        import random
+        import string
+        texts = examples["text"]
+        noisy_texts = []
+        for text in texts:
+            if random.random() < 0.1: # 10% chance to perturb text
+                if random.random() < 0.5:
+                    text = text.lower() # casing perturbation
+                else:
+                    # punctuation jitter
+                    if len(text) > 5:
+                        idx = random.randint(0, len(text)-1)
+                        char = random.choice(string.punctuation)
+                        text = text[:idx] + char + text[idx+1:]
+            noisy_texts.append(text)
+        examples["text"] = noisy_texts
+        return examples
+
+    dataset["train"] = dataset["train"].map(add_noise, batched=True)
 
     # Load model and tokenizer
     print(f"Loading model: {config.model.name} (LoRA: {config.model.use_lora})")
@@ -238,6 +303,49 @@ def train(config: Config) -> Path:
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
     compute_metrics = build_compute_metrics()
 
+    optimizer = None
+    lr_scheduler = None
+
+    if "deberta-v3" in config.model.name.lower():
+        opt_parameters = []
+        named_parameters = list(model.named_parameters())
+
+        no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
+        init_lr = config.training.learning_rate
+        layer_decay = config.training.layer_decay if hasattr(config.training, "layer_decay") else 0.9
+        weight_decay = config.training.weight_decay
+
+        num_layers = getattr(model.config, "num_hidden_layers", 12)
+
+        for n, p in named_parameters:
+            if not p.requires_grad:
+                continue
+
+            wd = 0.0 if any(nd in n for nd in no_decay) else weight_decay
+            lr = init_lr
+
+            if "deberta.encoder.layer" in n:
+                try:
+                    layer_num = int(n.split("deberta.encoder.layer.")[1].split(".")[0])
+                    lr = init_lr * (layer_decay ** (num_layers - layer_num))
+                except Exception:
+                    pass
+            elif "deberta.embeddings" in n:
+                lr = init_lr * (layer_decay ** (num_layers + 1))
+
+            opt_parameters.append({"params": p, "weight_decay": wd, "lr": lr})
+
+        optimizer = AdamW(opt_parameters, lr=init_lr)
+
+        num_update_steps_per_epoch = len(tokenized["train"]) // (config.training.per_device_train_batch_size * config.training.gradient_accumulation_steps)
+        if len(tokenized["train"]) % (config.training.per_device_train_batch_size * config.training.gradient_accumulation_steps) != 0:
+            num_update_steps_per_epoch += 1
+        max_steps = int(config.training.num_epochs * num_update_steps_per_epoch)
+        warmup_steps = int(max_steps * config.training.warmup_ratio)
+
+        if config.training.lr_scheduler_type == "cosine":
+            lr_scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps, num_training_steps=max_steps)
+
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -245,6 +353,7 @@ def train(config: Config) -> Path:
         eval_dataset=tokenized["validation"],
         data_collator=data_collator,
         compute_metrics=compute_metrics,
+        optimizers=(optimizer, lr_scheduler) if optimizer is not None else (None, None),
     )
 
     # Train

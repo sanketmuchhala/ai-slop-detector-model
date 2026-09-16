@@ -84,12 +84,12 @@ def test_tokenize_dataset(mock_load):
 
     from transformers import AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-cased")
-    tokenized = tokenize_dataset(ds, tokenizer, max_length=64)
+    tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-v3-base")
+    tokenized = tokenize_dataset(ds, tokenizer, max_length=150, stride=16)
     for split in tokenized:
         assert "input_ids" in tokenized[split].column_names
         assert "attention_mask" in tokenized[split].column_names
         assert "label" in tokenized[split].column_names
         assert "text" not in tokenized[split].column_names
         for ids in tokenized[split]["input_ids"]:
-            assert len(ids) <= 64
+            assert len(ids) <= 150

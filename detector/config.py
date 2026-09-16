@@ -20,10 +20,12 @@ class LoraConfig(BaseModel):
 
 
 class ModelConfig(BaseModel):
-    name: str = "bert-base-cased"
+    name: str = "microsoft/deberta-v3-base"
     num_labels: int = 2
     use_lora: bool = False
     lora: LoraConfig | None = None
+    num_dropout: int = 5
+    dropout_rate: float = 0.2
 
     @model_validator(mode="after")
     def validate_lora(self):
@@ -53,9 +55,12 @@ class TrainingConfig(BaseModel):
     weight_decay: float = 0.01
     warmup_ratio: float = 0.06
     max_grad_norm: float = 1.0
-    label_smoothing_factor: float = 0.0
-    lr_scheduler_type: str = "linear"
+    label_smoothing_factor: float = 0.05
+    lr_scheduler_type: str = "cosine"
     fp16: bool = True
+    bf16: bool = False
+    gradient_checkpointing: bool = True
+    layer_decay: float = 0.9  # LLRD parameter
     save_strategy: str = "epoch"
     save_steps: int | None = None
     eval_strategy: str = "epoch"

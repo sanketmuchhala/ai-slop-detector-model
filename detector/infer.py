@@ -10,6 +10,7 @@ from typing import Literal
 
 import torch
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
+from detector.model import DebertaV3ForSlopDetection
 
 
 class TextDetector:
@@ -31,7 +32,13 @@ class TextDetector:
             self.device = device
 
         self.tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(str(self.model_dir))
-        self.model: PreTrainedModel = AutoModelForSequenceClassification.from_pretrained(str(self.model_dir))
+
+        # Load correct model class
+        try:
+            self.model = DebertaV3ForSlopDetection.from_pretrained(str(self.model_dir))
+        except (ValueError, KeyError, EnvironmentError):
+            self.model = AutoModelForSequenceClassification.from_pretrained(str(self.model_dir))
+
         self.model = self.model.to(self.device)
         self.model.eval()
 
@@ -99,25 +106,43 @@ class TextDetector:
             }
 
         normalized = self.normalize_text(text)
+        # Use return_overflowing_tokens to handle sliding windows during inference
         inputs = self.tokenizer(
             normalized,
             max_length=512,
             truncation=True,
-            padding=True,
+            stride=128,
+            return_overflowing_tokens=True,
+            padding="max_length",
             return_tensors="pt",
-        ).to(self.device)
+        )
+
+        # Remove overflow_to_sample_mapping to pass to model
+        inputs.pop("overflow_to_sample_mapping", None)
+        inputs = inputs.to(self.device)
 
         with torch.no_grad():
             outputs = self.model(**inputs)
-            probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
-            score_ai = float(probs[0, 1].cpu().item())
+            # Soft-voting across sliding windows (average probabilities)
+            if isinstance(self.model, DebertaV3ForSlopDetection):
+                probs = torch.sigmoid(outputs.logits)
+                mean_probs = probs.mean(dim=0)
+                score_ai = float(mean_probs[0].cpu().item())
+            else:
+                probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
+                mean_probs = probs.mean(dim=0)
+                score_ai = float(mean_probs[1].cpu().item())
 
         threshold_data = self.thresholds.get(threshold_mode, {})
         threshold = threshold_data.get("threshold", 0.5)
         label = "ai" if score_ai >= threshold else "human"
         confidence = self._get_confidence(score_ai, threshold)
 
-        n_tokens = len(inputs["input_ids"][0])
+        # Approximate total tokens from first dimension of first window + step size * (num_windows - 1)
+        num_windows = inputs["input_ids"].shape[0]
+        n_tokens = int(inputs["attention_mask"][0].sum().item())
+        if num_windows > 1:
+             n_tokens += (num_windows - 1) * (512 - 128) # Approximate
 
         return {
             "label": label,
@@ -154,15 +179,40 @@ class TextDetector:
                     valid_texts,
                     max_length=512,
                     truncation=True,
-                    padding=True,
+                    stride=128,
+                    return_overflowing_tokens=True,
+                    padding="max_length",
                     return_tensors="pt",
-                ).to(self.device)
+                )
+
+                sample_mapping = inputs.pop("overflow_to_sample_mapping")
+                inputs = inputs.to(self.device)
+
                 with torch.no_grad():
                     outputs = self.model(**inputs)
-                    probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
+                    if isinstance(self.model, DebertaV3ForSlopDetection):
+                        probs = torch.sigmoid(outputs.logits)
+                    else:
+                        probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
+
+                # Aggregate across windows for each valid text
                 for k, orig_j in enumerate(valid_idx):
-                    n_tokens = int(inputs["attention_mask"][k].sum().item())
-                    scores_map[orig_j] = (float(probs[k, 1].item()), n_tokens)
+                    # Find all windows that belong to this sample
+                    window_indices = [idx for idx, m in enumerate(sample_mapping) if m == k]
+                    sample_probs = probs[window_indices]
+
+                    if isinstance(self.model, DebertaV3ForSlopDetection):
+                        mean_score_ai = float(sample_probs.mean(dim=0)[0].item())
+                    else:
+                        mean_score_ai = float(sample_probs.mean(dim=0)[1].item())
+
+                    # Approximate token count
+                    num_windows = len(window_indices)
+                    n_tokens = int(inputs["attention_mask"][window_indices[0]].sum().item())
+                    if num_windows > 1:
+                        n_tokens += (num_windows - 1) * (512 - 128)
+
+                    scores_map[orig_j] = (mean_score_ai, n_tokens)
 
             for j, norm_text in enumerate(batch_norm):
                 if j not in scores_map:

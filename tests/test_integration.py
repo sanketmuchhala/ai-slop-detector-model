@@ -106,4 +106,9 @@ def test_config_all_yamls_valid():
     for yaml_file in configs_dir.glob("*.yaml"):
         config = load_config(yaml_file)
         assert config.seed == 42
-        assert config.model.name == "bert-base-cased"
+        if yaml_file.name == "deberta_raid.yaml":
+            assert config.model.name == "microsoft/deberta-v3-base"
+        elif yaml_file.name == "roberta.yaml":
+            assert config.model.name == "roberta-base"
+        else:
+            assert config.model.name == "bert-base-cased"
