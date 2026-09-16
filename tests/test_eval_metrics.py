@@ -13,6 +13,10 @@ from detector.eval.metrics import (
     plot_roc_curve,
     save_roc_csv,
     tpr_at_fpr,
+    compute_prc_curve,
+    compute_pr_auc,
+    plot_prc_curve,
+    save_prc_csv,
 )
 
 
@@ -92,6 +96,7 @@ def test_compute_metrics_at_thresholds(sample_scores):
     y_true, y_scores = sample_scores
     result = compute_metrics_at_thresholds(y_true, y_scores, fpr_targets=[0.01, 0.05], tpr_targets=[0.90])
     assert "auc" in result
+    assert "pr_auc" in result
     assert "ece" in result
     assert "tpr_at_fpr" in result
     assert "fpr_at_tpr" in result
@@ -117,4 +122,38 @@ def test_save_roc_csv(sample_scores, tmp_path):
     assert save_path.exists()
     lines = save_path.read_text().strip().split("\n")
     assert lines[0] == "threshold,fpr,tpr"
+    assert len(lines) > 1
+
+
+def test_compute_prc_curve_shape(sample_scores):
+    y_true, y_scores = sample_scores
+    precision, recall, thresholds = compute_prc_curve(y_true, y_scores)
+    assert len(precision) == len(recall)
+    assert len(precision) > 0
+
+
+def test_compute_pr_auc_perfect():
+    y_true = np.array([0, 0, 0, 1, 1, 1])
+    y_scores = np.array([0.1, 0.2, 0.3, 0.7, 0.8, 0.9])
+    assert compute_pr_auc(y_true, y_scores) == 1.0
+
+
+def test_plot_prc_curve_saves_file(sample_scores, tmp_path):
+    y_true, y_scores = sample_scores
+    precision, recall, _ = compute_prc_curve(y_true, y_scores)
+    pr_auc = compute_pr_auc(y_true, y_scores)
+    save_path = tmp_path / "prc.png"
+    plot_prc_curve(precision, recall, pr_auc, save_path=save_path)
+    assert save_path.exists()
+    assert save_path.stat().st_size > 0
+
+
+def test_save_prc_csv(sample_scores, tmp_path):
+    y_true, y_scores = sample_scores
+    precision, recall, thresholds = compute_prc_curve(y_true, y_scores)
+    save_path = tmp_path / "prc.csv"
+    save_prc_csv(precision, recall, thresholds, save_path)
+    assert save_path.exists()
+    lines = save_path.read_text().strip().split("\n")
+    assert lines[0] == "threshold,precision,recall"
     assert len(lines) > 1

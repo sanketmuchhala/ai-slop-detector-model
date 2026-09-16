@@ -7,7 +7,7 @@ from pathlib import Path
 
 import matplotlib
 import numpy as np
-from sklearn.metrics import confusion_matrix, roc_auc_score, roc_curve
+from sklearn.metrics import confusion_matrix, roc_auc_score, roc_curve, precision_recall_curve, average_precision_score
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -24,6 +24,19 @@ def compute_roc_curve(
 def compute_auc(y_true: np.ndarray, y_scores: np.ndarray) -> float:
     """Compute AUC-ROC score."""
     return float(roc_auc_score(y_true, y_scores))
+
+
+def compute_prc_curve(
+    y_true: np.ndarray,
+    y_scores: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute Precision-Recall curve. Returns (precision_array, recall_array, thresholds_array)."""
+    return precision_recall_curve(y_true, y_scores)
+
+
+def compute_pr_auc(y_true: np.ndarray, y_scores: np.ndarray) -> float:
+    """Compute PR-AUC (Average Precision) score."""
+    return float(average_precision_score(y_true, y_scores))
 
 
 def tpr_at_fpr(
@@ -124,6 +137,7 @@ def compute_metrics_at_thresholds(
     """Compute TPR@FPR and FPR@TPR for all target operating points."""
     fpr_arr, tpr_arr, thresholds = compute_roc_curve(y_true, y_scores)
     auc = compute_auc(y_true, y_scores)
+    pr_auc = compute_pr_auc(y_true, y_scores)
     ece = compute_ece(y_true, y_scores)
 
     tpr_at_fpr_results = {}
@@ -136,6 +150,7 @@ def compute_metrics_at_thresholds(
 
     return {
         "auc": round(auc, 6),
+        "pr_auc": round(pr_auc, 6),
         "ece": round(ece, 6),
         "tpr_at_fpr": tpr_at_fpr_results,
         "fpr_at_tpr": fpr_at_tpr_results,
@@ -199,3 +214,44 @@ def save_roc_csv(
         writer.writerow(["threshold", "fpr", "tpr"])
         for t, fp, tp in zip(thresholds, fpr_arr, tpr_arr):
             writer.writerow([round(float(t), 6), round(float(fp), 6), round(float(tp), 6)])
+
+
+def plot_prc_curve(
+    precision_arr: np.ndarray,
+    recall_arr: np.ndarray,
+    pr_auc_score: float,
+    save_path: Path | None = None,
+) -> None:
+    """Plot Precision-Recall curve with PR-AUC in legend."""
+    fig, ax = plt.subplots(figsize=(6, 5))
+    ax.plot(recall_arr, precision_arr, label=f"PRC (PR-AUC = {pr_auc_score:.4f})")
+
+    ax.set_xlabel("Recall (TPR)")
+    ax.set_ylabel("Precision")
+    ax.set_title("Precision-Recall Curve")
+    ax.legend(loc="lower left")
+    fig.tight_layout()
+
+    if save_path:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def save_prc_csv(
+    precision_arr: np.ndarray,
+    recall_arr: np.ndarray,
+    thresholds: np.ndarray,
+    save_path: Path,
+) -> None:
+    """Save PRC data as CSV with columns: threshold, precision, recall."""
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(save_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["threshold", "precision", "recall"])
+        # precision_recall_curve returns thresholds array with len = len(precision_arr) - 1
+        # The last precision and recall values correspond to a threshold of 1.0 (no samples selected)
+        for i, t in enumerate(thresholds):
+            writer.writerow([round(float(t), 6), round(float(precision_arr[i]), 6), round(float(recall_arr[i]), 6)])
