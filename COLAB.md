@@ -49,6 +49,9 @@ If CUDA is `False`, stop and switch to a GPU runtime.
 
 ```python
 import torch
+if not torch.cuda.is_available():
+    raise SystemError("CUDA is not available. Please ensure your Colab runtime type is set to GPU (Runtime → Change runtime type → T4 GPU).")
+
 print(f"GPU: {torch.cuda.get_device_name(0)}")
 print(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 ```
