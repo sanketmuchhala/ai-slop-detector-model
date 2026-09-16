@@ -20,6 +20,11 @@ class DebertaV3ForSlopDetection(DebertaV2PreTrainedModel):
 
         self.post_init()
 
+    def _convert_to_half(self, module):
+        """Helper to cast weights to matching precision"""
+        if module.weight is not None and module.weight.dtype != torch.float32:
+            pass # Keep precision as it is set by trainer
+
     def forward(self, input_ids=None, attention_mask=None, labels=None, **kwargs):
         outputs = self.deberta(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
         sequence_output = outputs.last_hidden_state  # [batch_size, seq_len, hidden_size]
@@ -39,6 +44,9 @@ class DebertaV3ForSlopDetection(DebertaV2PreTrainedModel):
 
         # Concatenate mean and max pooled representations
         pooled = torch.cat([mean_pooled, max_pooled], dim=-1)
+
+        # Ensure pooled tensor is in same dtype as classifier weights (prevent Float vs Half crash)
+        pooled = pooled.to(self.classifier.weight.dtype)
 
         # Multi-Sample Dropout average
         logits = torch.mean(torch.stack([self.classifier(drop(pooled)) for drop in self.dropouts], dim=0), dim=0)
