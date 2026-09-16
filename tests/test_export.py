@@ -19,7 +19,7 @@ def test_generate_model_card(tmp_path):
     generate_model_card(config, metrics, thresholds, path)
     assert path.exists()
     content = path.read_text()
-    assert "bert-base-cased" in content
+    assert "microsoft/deberta-v3-base" in content
     assert "0.95" in content
     assert "Conservative" in content or "conservative" in content
 
