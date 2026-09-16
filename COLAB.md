@@ -59,22 +59,22 @@ print(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 
 Pick **one** of the two options below.
 
-### Option A — RoBERTa (recommended, best accuracy)
+### Option A — DeBERTa-v3 (recommended, best accuracy)
 
-Trains `roberta-base` on wiki + RAID train + RAID extra splits.  
+Trains `microsoft/deberta-v3-base` on wiki + RAID train split with custom Multi-Sample Dropout head, LLRD optimization, and overlapping chunking.
+Expected time: **~3–4 hours** on T4.
+
+```python
+!make train CONFIG=configs/deberta_raid.yaml
+```
+
+### Option B — RoBERTa baseline (faster)
+
+Trains `roberta-base` on wiki + RAID train + RAID extra splits.
 Expected time: **~2–3 hours** on T4.
 
 ```python
 !make train CONFIG=configs/roberta.yaml
-```
-
-### Option B — BERT baseline (faster, cheaper)
-
-Trains `bert-base-cased` on wiki + RAID train split.  
-Expected time: **~1–1.5 hours** on T4.
-
-```python
-!make train CONFIG=configs/baseline.yaml
 ```
 
 Training prints `eval_auc` at the end of each epoch. You want to see it climbing toward 0.90+. If it's stuck at ~0.50, stop and check the RAID install warning in the output.
@@ -170,8 +170,8 @@ Look for `"auc"` in the output. Anything above **0.85** on RAID is solid. Above 
 If you trust the run will complete without errors:
 
 ```python
-# RoBERTa
-!make pipeline CONFIG=configs/roberta.yaml DATASET=wiki
+# DeBERTa
+!make pipeline CONFIG=configs/deberta_raid.yaml DATASET=wiki
 
 # Then grab the run dir and calibrate (pipeline doesn't do this automatically)
 import glob, os

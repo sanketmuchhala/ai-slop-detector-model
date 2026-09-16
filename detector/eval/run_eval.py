@@ -20,6 +20,9 @@ from detector.eval.metrics import (
     compute_roc_curve,
     plot_roc_curve,
     save_roc_csv,
+    compute_prc_curve,
+    plot_prc_curve,
+    save_prc_csv,
 )
 
 
@@ -123,6 +126,11 @@ def run_wiki_eval(
     save_roc_csv(fpr_arr, tpr_arr, thresholds, run_dir / "roc.csv")
     plot_roc_curve(fpr_arr, tpr_arr, metrics["auc"], save_path=run_dir / "roc.png")
 
+    # PRC artifacts
+    precision_arr, recall_arr, thresholds_prc = compute_prc_curve(labels, scores)
+    save_prc_csv(precision_arr, recall_arr, thresholds_prc, run_dir / "prc.csv")
+    plot_prc_curve(precision_arr, recall_arr, metrics["pr_auc"], save_path=run_dir / "prc.png")
+
     return metrics
 
 
@@ -182,6 +190,11 @@ def run_raid_labeled_eval(
     fpr_arr, tpr_arr, thresholds = compute_roc_curve(labels, scores)
     save_roc_csv(fpr_arr, tpr_arr, thresholds, run_dir / "raid_roc.csv")
     plot_roc_curve(fpr_arr, tpr_arr, metrics["auc"], save_path=run_dir / "raid_roc.png")
+
+    # PRC for RAID
+    precision_arr, recall_arr, thresholds_prc = compute_prc_curve(labels, scores)
+    save_prc_csv(precision_arr, recall_arr, thresholds_prc, run_dir / "raid_prc.csv")
+    plot_prc_curve(precision_arr, recall_arr, metrics["pr_auc"], save_path=run_dir / "raid_prc.png")
 
     return metrics
 

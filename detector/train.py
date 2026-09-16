@@ -105,10 +105,16 @@ def build_compute_metrics() -> callable:
         except ValueError:
             auc = 0.0
 
+        try:
+            from sklearn.metrics import average_precision_score
+            pr_auc = float(average_precision_score(labels, probs[:, 1]))
+        except ValueError:
+            pr_auc = 0.0
+
         # ECE (Expected Calibration Error)
         ece = _compute_ece(labels, probs[:, 1], n_bins=15)
 
-        return {"accuracy": accuracy, "f1": f1, "auc": auc, "ece": ece}
+        return {"accuracy": accuracy, "f1": f1, "auc": auc, "pr_auc": pr_auc, "ece": ece}
 
     return compute_metrics
 
